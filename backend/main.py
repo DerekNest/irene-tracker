@@ -115,7 +115,7 @@ def init_db():
     conn.commit()
     conn.close()
     
-    
+     # Initialize DB on startup
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
