@@ -76,7 +76,8 @@ def get_tier(exp: int) -> int:
     return tier
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS takes (
@@ -92,22 +93,29 @@ def init_db():
         CREATE TABLE IF NOT EXISTS player (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             current_exp INTEGER DEFAULT 0,
-            pending_level_up INTEGER DEFAULT 0,
-            pending_level_up_tier INTEGER DEFAULT 0,
-            pending_level_up_quip TEXT DEFAULT '',
             current_health INTEGER DEFAULT 100,
             current_tier INTEGER DEFAULT 0,
             last_quip TEXT DEFAULT '',
-            last_quip_tier TEXT DEFAULT ''
+            last_quip_tier TEXT DEFAULT '',
+            pending_level_up INTEGER DEFAULT 0,
+            pending_level_up_tier INTEGER DEFAULT 0,
+            pending_level_up_quip TEXT DEFAULT ''
         )
     """)
-    # Ensure exactly one player row
     c.execute("INSERT OR IGNORE INTO player (id) VALUES (1)")
+    # migrate: add columns if they don't exist yet
+    existing = [r[1] for r in c.execute("PRAGMA table_info(player)").fetchall()]
+    for col, typedef in [
+        ("pending_level_up", "INTEGER DEFAULT 0"),
+        ("pending_level_up_tier", "INTEGER DEFAULT 0"),
+        ("pending_level_up_quip", "TEXT DEFAULT ''"),
+    ]:
+        if col not in existing:
+            c.execute(f"ALTER TABLE player ADD COLUMN {col} {typedef}")
     conn.commit()
     conn.close()
-
-init_db()
-
+    
+    
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
