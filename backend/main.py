@@ -75,47 +75,64 @@ def get_tier(exp: int) -> int:
             tier = lvl["tier"]
     return tier
 
+"""
+PATCH: replace your existing init_db() with this version.
+it uses ALTER TABLE to add missing columns instead of recreating the table,
+so existing player data and takes are never lost.
+"""
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS takes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            text TEXT NOT NULL,
-            exp_value INTEGER NOT NULL,
-            reaction_tier TEXT,
-            quip TEXT,
-            timestamp TEXT NOT NULL
-        )
-    """)
+
+    # create tables if they don't exist yet (first deploy)
     c.execute("""
         CREATE TABLE IF NOT EXISTS player (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            current_exp INTEGER DEFAULT 0,
-            current_health INTEGER DEFAULT 100,
-            current_tier INTEGER DEFAULT 0,
-            last_quip TEXT DEFAULT '',
-            last_quip_tier TEXT DEFAULT '',
+            id INTEGER PRIMARY KEY,
+            name TEXT DEFAULT 'Irene',
+            level INTEGER DEFAULT 1,
+            xp INTEGER DEFAULT 0,
+            xp_to_next INTEGER DEFAULT 100,
+            tier TEXT DEFAULT 'Civilian',
             pending_level_up INTEGER DEFAULT 0,
             pending_level_up_tier INTEGER DEFAULT 0,
             pending_level_up_quip TEXT DEFAULT ''
         )
     """)
-    c.execute("INSERT OR IGNORE INTO player (id) VALUES (1)")
-    # migrate: add columns if they don't exist yet
-    existing = [r[1] for r in c.execute("PRAGMA table_info(player)").fetchall()]
-    for col, typedef in [
-        ("pending_level_up", "INTEGER DEFAULT 0"),
-        ("pending_level_up_tier", "INTEGER DEFAULT 0"),
-        ("pending_level_up_quip", "TEXT DEFAULT ''"),
-    ]:
-        if col not in existing:
-            c.execute(f"ALTER TABLE player ADD COLUMN {col} {typedef}")
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS takes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT,
+            heat INTEGER,
+            timestamp TEXT
+        )
+    """)
+
+    # --- migration: add columns that may be missing from older db ---
+    # fetch current columns
+    c.execute("PRAGMA table_info(player)")
+    existing_columns = {row[1] for row in c.fetchall()}
+
+    migrations = [
+        ("pending_level_up",      "ALTER TABLE player ADD COLUMN pending_level_up INTEGER DEFAULT 0"),
+        ("pending_level_up_tier", "ALTER TABLE player ADD COLUMN pending_level_up_tier INTEGER DEFAULT 0"),
+        ("pending_level_up_quip", "ALTER TABLE player ADD COLUMN pending_level_up_quip TEXT DEFAULT ''"),
+    ]
+
+    for col_name, sql in migrations:
+        if col_name not in existing_columns:
+            c.execute(sql)
+
+    # seed a player row if the table is empty
+    c.execute("SELECT COUNT(*) FROM player")
+    if c.fetchone()[0] == 0:
+        c.execute("INSERT INTO player DEFAULT VALUES")
+
     conn.commit()
     conn.close()
     
-     # Initialize DB on startup
+    
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
