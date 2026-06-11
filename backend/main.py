@@ -272,3 +272,4 @@ def reset_player():
     conn.execute("DELETE FROM takes")
     conn.commit()
     return {"ok": True}
+#test
