@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
-const API = "http://localhost:8000";
+const API = "https://irene-tracker-production.up.railway.app";
 
 // ─── PALETTE: amber/gold + teal + cream on near-black ─────────────────────────
 const C = {
