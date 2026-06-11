@@ -615,15 +615,35 @@ export default function App() {
   const [view, setView] = useState("player");
   const [loading, setLoading] = useState(true);
 
-  const fetchAll = useCallback(async () => {
+  // WAKE PING ADDED HERE
+  useEffect(() => {
+    fetch(`${API}/player`).catch(() => { });
+  }, []);
+
+  // RETRY LOGIC WITH EXPONENTIAL BACKOFF ADDED HERE
+  const fetchAll = useCallback(async (retries = 3, delay = 1000) => {
     try {
       const [p, t] = await Promise.all([
-        fetch(`${API}/player`).then(r => r.json()),
-        fetch(`${API}/takes`).then(r => r.json()),
+        fetch(`${API}/player`).then(r => {
+          if (!r.ok) throw new Error("Failed fetching player");
+          return r.json();
+        }),
+        fetch(`${API}/takes`).then(r => {
+          if (!r.ok) throw new Error("Failed fetching takes");
+          return r.json();
+        }),
       ]);
-      setPlayer(p); setTakes(t);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+      setPlayer(p);
+      setTakes(t);
+      setLoading(false);
+    } catch (e) {
+      console.error(e);
+      if (retries > 0) {
+        setTimeout(() => fetchAll(retries - 1, delay * 2), delay);
+      } else {
+        setLoading(false);
+      }
+    }
   }, []);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
