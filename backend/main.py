@@ -7,37 +7,15 @@ import sqlite3
 import os
 from datetime import datetime
 
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS", "PUT"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
-
-@app.options("/{rest_of_path:path}")
-async def preflight_handler(request: Request, rest_of_path: str):
-    return Response(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS, PUT",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
-
 DB_PATH = os.path.join(os.path.dirname(__file__), "irene.db")
 
 # --- Level config ---
 LEVELS = [
-    {"tier": 0, "name": "Talking Stage",       "class": "Stranger",         "exp_required": 0,   "max_health": 100},
-    {"tier": 1, "name": "Situationship",        "class": "Unlocked",         "exp_required": 100, "max_health": 100},
-    {"tier": 2, "name": "When Am I Seeing You", "class": "Based Individual", "exp_required": 250, "max_health": 100},
-    {"tier": 3, "name": "Please Literally Now", "class": "Certified Hiker",  "exp_required": 450, "max_health": 100},
-    {"tier": 4, "name": "So When Am I Picking You Up", "class": "Trail Boss", "exp_required": 700, "max_health": 100},
+    {"tier": 0, "name": "Talking Stage",               "class": "Stranger",         "exp_required": 0,   "max_health": 100},
+    {"tier": 1, "name": "Situationship",                "class": "Unlocked",         "exp_required": 100, "max_health": 100},
+    {"tier": 2, "name": "When Am I Seeing You",         "class": "Based Individual", "exp_required": 250, "max_health": 100},
+    {"tier": 3, "name": "Please Literally Now",         "class": "Certified Hiker",  "exp_required": 450, "max_health": 100},
+    {"tier": 4, "name": "So When Am I Picking You Up",  "class": "Trail Boss",       "exp_required": 700, "max_health": 100},
 ]
 
 QUIPS = {
@@ -75,42 +53,39 @@ def get_tier(exp: int) -> int:
             tier = lvl["tier"]
     return tier
 
-"""
-PATCH: replace your existing init_db() with this version.
-it uses ALTER TABLE to add missing columns instead of recreating the table,
-so existing player data and takes are never lost.
-"""
-
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # create tables if they don't exist yet (first deploy)
+    # create player table if it doesn't exist
     c.execute("""
         CREATE TABLE IF NOT EXISTS player (
             id INTEGER PRIMARY KEY,
             name TEXT DEFAULT 'Irene',
-            level INTEGER DEFAULT 1,
-            xp INTEGER DEFAULT 0,
-            xp_to_next INTEGER DEFAULT 100,
-            tier TEXT DEFAULT 'Civilian',
+            current_exp INTEGER DEFAULT 0,
+            current_health INTEGER DEFAULT 100,
+            current_tier INTEGER DEFAULT 0,
+            last_quip TEXT DEFAULT '',
+            last_quip_tier TEXT DEFAULT '',
             pending_level_up INTEGER DEFAULT 0,
             pending_level_up_tier INTEGER DEFAULT 0,
             pending_level_up_quip TEXT DEFAULT ''
         )
     """)
 
+    # create takes table if it doesn't exist
     c.execute("""
         CREATE TABLE IF NOT EXISTS takes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            content TEXT,
-            heat INTEGER,
+            text TEXT,
+            exp_value INTEGER,
+            reaction_tier TEXT,
+            quip TEXT,
             timestamp TEXT
         )
     """)
 
-    # --- migration: add columns that may be missing from older db ---
-    # fetch current columns
+    # migration: add any columns missing from older deployed db
     c.execute("PRAGMA table_info(player)")
     existing_columns = {row[1] for row in c.fetchall()}
 
@@ -118,31 +93,60 @@ def init_db():
         ("pending_level_up",      "ALTER TABLE player ADD COLUMN pending_level_up INTEGER DEFAULT 0"),
         ("pending_level_up_tier", "ALTER TABLE player ADD COLUMN pending_level_up_tier INTEGER DEFAULT 0"),
         ("pending_level_up_quip", "ALTER TABLE player ADD COLUMN pending_level_up_quip TEXT DEFAULT ''"),
+        ("last_quip",             "ALTER TABLE player ADD COLUMN last_quip TEXT DEFAULT ''"),
+        ("last_quip_tier",        "ALTER TABLE player ADD COLUMN last_quip_tier TEXT DEFAULT ''"),
     ]
 
     for col_name, sql in migrations:
         if col_name not in existing_columns:
             c.execute(sql)
 
-    # seed a player row if the table is empty
+    # seed player row if empty
     c.execute("SELECT COUNT(*) FROM player")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO player DEFAULT VALUES")
 
     conn.commit()
     conn.close()
-    
-    
+
+# run migrations before the app starts accepting requests
+init_db()
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS", "PUT"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(request: Request, rest_of_path: str):
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS, PUT",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+# shared connection — avoids the "database is locked" race on concurrent requests
+_conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+_conn.execute("PRAGMA journal_mode=WAL")
+_conn.execute("PRAGMA busy_timeout=5000")
+_conn.row_factory = sqlite3.Row
+
 def db():
-    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.row_factory = sqlite3.Row
-    return conn
+    return _conn
 
 # --- Models ---
 class TakeIn(BaseModel):
     text: str
-    exp_value: int  # positive = gain, negative = loss
+    exp_value: int
 
 class TakeUpdate(BaseModel):
     text: Optional[str] = None
@@ -153,7 +157,6 @@ class TakeUpdate(BaseModel):
 def get_player():
     conn = db()
     player = dict(conn.execute("SELECT * FROM player WHERE id=1").fetchone())
-    conn.close()
     tier = get_tier(player["current_exp"])
     level_data = LEVELS[tier]
     next_level = LEVELS[tier + 1] if tier < len(LEVELS) - 1 else None
@@ -175,7 +178,6 @@ def get_player():
 def get_takes():
     conn = db()
     rows = conn.execute("SELECT * FROM takes ORDER BY timestamp DESC").fetchall()
-    conn.close()
     return [dict(r) for r in rows]
 
 @app.post("/takes")
@@ -188,14 +190,13 @@ def log_take(take: TakeIn):
     new_tier = get_tier(new_exp)
     leveled_up = new_tier > old_tier
 
-    # Health logic
     if take.exp_value < 0:
         new_health = max(0, player["current_health"] + take.exp_value)
     else:
         new_health = player["current_health"]
 
     if leveled_up:
-        new_health = LEVELS[new_tier]["max_health"]  # reset on level up
+        new_health = LEVELS[new_tier]["max_health"]
 
     game_over = new_health <= 0
     health_critical = new_health <= 25 and not game_over
@@ -211,7 +212,6 @@ def log_take(take: TakeIn):
         "INSERT INTO takes (text, exp_value, reaction_tier, quip, timestamp) VALUES (?,?,?,?,?)",
         (take.text, take.exp_value, reaction_tier, quip_text, ts)
     )
-    # pending_level_up: stored for HER view to consume, not shown to admin
     conn.execute(
         """UPDATE player SET current_exp=?, current_health=?, current_tier=?,
            last_quip=?, last_quip_tier=?,
@@ -224,11 +224,10 @@ def log_take(take: TakeIn):
     )
     conn.commit()
     take_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.close()
 
     return {
         "id": take_id,
-        "leveled_up": False,  # don't show level up on admin side
+        "leveled_up": False,
         "game_over": game_over,
         "new_tier": new_tier,
         "new_exp": new_exp,
@@ -244,10 +243,8 @@ def delete_take(take_id: int):
     if not take:
         raise HTTPException(status_code=404, detail="Take not found")
     take = dict(take)
-    # Reverse the exp/health effect
     player = dict(conn.execute("SELECT * FROM player WHERE id=1").fetchone())
     new_exp = max(0, player["current_exp"] - take["exp_value"])
-    # Recompute health by replaying is complex — just clamp
     if take["exp_value"] < 0:
         new_health = min(LEVELS[get_tier(new_exp)]["max_health"], player["current_health"] - take["exp_value"])
     else:
@@ -257,7 +254,6 @@ def delete_take(take_id: int):
     conn.execute("UPDATE player SET current_exp=?, current_health=?, current_tier=? WHERE id=1",
                  (new_exp, new_health, new_tier))
     conn.commit()
-    conn.close()
     return {"ok": True}
 
 @app.post("/player/dismiss_level_up")
@@ -265,14 +261,14 @@ def dismiss_level_up():
     conn = db()
     conn.execute("UPDATE player SET pending_level_up=0, pending_level_up_quip='' WHERE id=1")
     conn.commit()
-    conn.close()
     return {"ok": True}
 
 @app.post("/player/reset")
 def reset_player():
     conn = db()
-    conn.execute("UPDATE player SET current_exp=0, current_health=100, current_tier=0, last_quip='', last_quip_tier='', pending_level_up=0, pending_level_up_tier=0, pending_level_up_quip='' WHERE id=1")
+    conn.execute("""UPDATE player SET current_exp=0, current_health=100, current_tier=0,
+                    last_quip='', last_quip_tier='', pending_level_up=0,
+                    pending_level_up_tier=0, pending_level_up_quip='' WHERE id=1""")
     conn.execute("DELETE FROM takes")
     conn.commit()
-    conn.close()
     return {"ok": True}
