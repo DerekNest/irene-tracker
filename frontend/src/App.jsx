@@ -455,7 +455,7 @@ function GameOverScreen() {
 }
 
 // ─── CREDITS ──────────────────────────────────────────────────────────────────
-function CreditsScreen() {
+function CreditsScreen({ onDismiss }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 999, overflow: "hidden" }}>
       <div style={{ animation: "creditsScroll 14s linear forwards", textAlign: "center", padding: "0 40px" }}>
@@ -465,6 +465,15 @@ function CreditsScreen() {
         <PX size={6} color={C.gold} style={{ display: "block", marginBottom: 40 }}>quest complete.</PX>
         <PX size={5} color={C.creamDim} style={{ display: "block", lineHeight: 3 }}>based takes logged<br />health bars survived<br />one hike pending</PX>
       </div>
+      <button onClick={onDismiss} style={{
+        position: "absolute", bottom: 32, left: "50%", transform: "translateX(-50%)",
+        background: "none", border: `2px solid ${C.gold}`, color: C.gold,
+        padding: "8px 16px", cursor: "pointer",
+        fontFamily: "'Press Start 2P',monospace", fontSize: 6,
+        boxShadow: `0 0 10px ${C.gold}44`,
+      }}>
+        [ view stats ]
+      </button>
     </div>
   );
 }
@@ -610,6 +619,7 @@ export default function App() {
   const [takes,  setTakes]  = useState([]);
   const [view,   setView]   = useState("player");
   const [loading, setLoading] = useState(true);
+  const [creditsDismissed, setCreditsDismissed] = useState(false);
 
   useEffect(() => { fetch(`${API}/player`).catch(() => {}); }, []);
 
@@ -662,7 +672,7 @@ export default function App() {
       `}</style>
       <CRT />
       {gameOver && <GameOverScreen />}
-      {maxTier && !gameOver && <CreditsScreen />}
+      {maxTier && !gameOver && !creditsDismissed && <CreditsScreen onDismiss={() => setCreditsDismissed(true)} />}
       <div style={{ maxWidth: 680, margin: "0 auto", padding: "0 16px 80px" }}>
         <div style={{ padding: "24px 0 20px", borderBottom: `2px solid ${C.border}`, marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
